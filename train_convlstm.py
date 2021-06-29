@@ -4,7 +4,7 @@ from tensorflow.keras.layers import ConvLSTM2D, Dense, Flatten, Dropout, BatchNo
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.callbacks import EarlyStopping
 from sklearn.model_selection import train_test_split
-import cv2, os, numpy as np
+import cv2, os, math, numpy as np
 
 
 def get_frames(video_path):
@@ -12,6 +12,8 @@ def get_frames(video_path):
 
     # count the number of frames
     fps = int(capture.get(cv2.CAP_PROP_FPS))
+    frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+    duration_ceil = math.ceil(frames/fps)
 
     # calculate duration of the video
     step = int(fps / Config.fps_to_take)
@@ -22,30 +24,25 @@ def get_frames(video_path):
         success, image = capture.read()
         if success:
             if index % step == 0:
-                # original_frames.append(image)
                 resized_frames.append(cv2.resize(image, (Config.img_dim, Config.img_dim), interpolation=cv2.INTER_AREA))
-                if len(resized_frames) == Config.fps_to_take:
-                    yield np.asarray(resized_frames)
-                    resized_frames = []
             index += 1
         else:
             capture.release()
             break
 
-    if len(resized_frames) != 0 and len(resized_frames) < Config.fps_to_take:
-        # copy every image #copy_num times
-        copy_num = int(Config.fps_to_take / len(resized_frames))
+    necessary = (duration_ceil + 1) * step - Config.window
 
-        new_resized_frames = []
-        for img in resized_frames:
-            new_resized_frames.append(np.copy(img) * copy_num)
+    # copy first frame and put this copies at the beggining
+    for _ in range(necessary - len(resized_frames)):
+        resized_frames.insert(0, np.copy(resized_frames[0]))
 
-        # fullfil the rest of the array with the last image
-        for _ in range(Config.fps_to_take - len(new_resized_frames)):
-            new_resized_frames.append(resized_frames[-1])
-
-        resized_frames = new_resized_frames
-        yield np.asarray(resized_frames)
+    # yield parts (windows)
+    part = 0
+    while True:
+        if part * Config.step + Config.window > len(resized_frames):
+            break
+        yield np.asarray(resized_frames[part * Config.step : part * Config.step + Config.window])
+        part += 1
 
 
 def create_data(dir_path):
@@ -56,6 +53,7 @@ def create_data(dir_path):
         act_files = os.listdir(os.path.join(dir_path, cl))
         for vid_file in act_files:
             for part in get_frames(os.path.join(os.path.join(dir_path, cl), vid_file)):
+                assert part.shape == (Config.window, Config.img_dim, Config.img_dim, 3)
                 x_resized.append(part)
 
                 y = [0] * len(y_classes)
@@ -73,7 +71,7 @@ def create_data(dir_path):
 def get_model(class_num):
     model = Sequential()
     model.add(ConvLSTM2D(filters=64, kernel_size=(3, 3), return_sequences=False, data_format="channels_last",
-                         input_shape=(5, Config.img_dim, Config.img_dim, 3)))
+                         input_shape=(Config.window, Config.img_dim, Config.img_dim, 3)))
     model.add(BatchNormalization())
     # play with layers: batch normalization, multiple ConvLSTM2D layers
     model.add(Dropout(0.2))
