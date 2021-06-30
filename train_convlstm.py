@@ -1,8 +1,8 @@
 from config import Config
-from tensorflow.keras.models import Sequential
+from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.layers import ConvLSTM2D, Dense, Flatten, Dropout, BatchNormalization
 from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
 from sklearn.model_selection import train_test_split
 import cv2, os, math, numpy as np
 
@@ -13,7 +13,6 @@ def get_frames(video_path):
     # count the number of frames
     fps = int(capture.get(cv2.CAP_PROP_FPS))
     frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
-    duration_ceil = math.ceil(frames/fps)
 
     # calculate duration of the video
     step = int(fps / Config.fps_to_take)
@@ -30,7 +29,8 @@ def get_frames(video_path):
             capture.release()
             break
 
-    necessary = (duration_ceil + 1) * step - Config.window
+    x = math.ceil((len(resized_frames) - Config.window)/Config.step)
+    necessary = Config.window + x * Config.step
 
     # copy first frame and put this copies at the beggining
     for _ in range(necessary - len(resized_frames)):
@@ -39,7 +39,7 @@ def get_frames(video_path):
     # yield parts (windows)
     part = 0
     while True:
-        if part * Config.step + Config.window > len(resized_frames):
+        if part * Config.step + Config.window == len(resized_frames):
             break
         yield np.asarray(resized_frames[part * Config.step : part * Config.step + Config.window])
         part += 1
@@ -89,15 +89,29 @@ def train_model(x_train, y_train):
     opt = Adam(learning_rate=0.001, lr=0.001, decay=1e-5)
     model.compile(loss='categorical_crossentropy', optimizer=opt, metrics=["accuracy"])
 
+    if not os.path.exists(Config.checkpoint_path):
+        os.makedirs(Config.checkpoint_path)
+
+    cp_callback = ModelCheckpoint(filepath=Config.checkpoint_path, save_weights_only=True, verbose=1)
+
     earlystop = EarlyStopping(patience=7)
-    callbacks = [earlystop]
+    callbacks = [cp_callback, earlystop]
 
     model.fit(x=x_train, y=y_train, epochs=40, batch_size=8, shuffle=True, validation_split=0.2, callbacks=callbacks)
+
+    if not os.path.exists(Config.data_path):
+        os.makedirs(Config.data_path)
+
+    model.save(Config.data_path + 'model')
+    model.save(Config.data_path + 'model.h5')
+    model.save_weights(Config.data_path + 'weights')
 
     return model
 
 
-def predict(model, x_test):
+def predict(x_test):
+    model = load_model(Config.data_path + 'model.h5')
+
     return model.predict(x_test)
 
 
