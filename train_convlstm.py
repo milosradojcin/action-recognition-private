@@ -175,10 +175,9 @@ if __name__ == '__main__':
     # --------- Create and save data ---------
     x_train_paths, x_test_paths, y_train, y_test = split()
 
-    # Create train and test data and save them for later use
     x_train, y_train = create_data(x_train_paths, y_train)
     x_test, y_test = create_data(x_test_paths, y_test)
-    save(x_train=x_train, y_train=y_train, x_test=x_test, y_test=y_test, classes=os.listdir(Config.dataset_path))
+    save(x_train=x_train, y_train=y_train, x_test=x_test, y_test=y_test, classes=np.asarray(os.listdir(Config.dataset_path)))
     
     # --------- Load data and train model ---------
     # data = load()
