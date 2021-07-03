@@ -3,7 +3,6 @@ from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.layers import ConvLSTM2D, Dense, Flatten, Dropout, BatchNormalization
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
-from sklearn.model_selection import train_test_split
 import cv2, os, math, numpy as np
 
 
@@ -45,27 +44,19 @@ def get_frames(video_path):
         part += 1
 
 
-def create_data(dir_path):
-    x_resized, y_onehot, y_classes = [], [], []
-
-    y_classes = os.listdir(dir_path)
-    for cl in y_classes:
-        act_files = os.listdir(os.path.join(dir_path, cl))
-        for vid_file in act_files:
-            for part in get_frames(os.path.join(os.path.join(dir_path, cl), vid_file)):
-                assert part.shape == (Config.window, Config.img_dim, Config.img_dim, 3)
-                x_resized.append(part)
-
-                y = [0] * len(y_classes)
-                y[y_classes.index(cl)] = 1
-                y_onehot.append(np.asarray(y, dtype=np.uint8))
-
-        print(f'Class {(y_classes.index(cl) + 1)}/{len(y_classes)}...')
+def create_data(paths, y):
+    x_resized, y_onehot = [], []
+    
+    for vid_file in paths:
+        for part in get_frames(vid_file):
+            assert part.shape == (Config.window, Config.img_dim, Config.img_dim, 3)
+            x_resized.append(part)
+            y_onehot.append(np.asarray(y[paths.index(vid_file)], dtype=np.uint8))
 
     x_resized = np.asarray(x_resized)
-    y_onehot, y_classes = np.asarray(y_onehot), np.asarray(y_classes)
+    y_onehot = np.asarray(y_onehot)
 
-    return x_resized, y_onehot, y_classes
+    return x_resized, y_onehot
 
 
 def get_model(class_num):
@@ -86,7 +77,7 @@ def get_model(class_num):
 def train_model(x_train, y_train):
     model = get_model(class_num=len(y_train[0]))
     # opt = SGD(lr=0.001)
-    opt = Adam(learning_rate=0.001, lr=0.001, decay=1e-5)
+    opt = Adam(learning_rate=0.0001, lr=0.0001, decay=1e-5)
     model.compile(loss='categorical_crossentropy', optimizer=opt, metrics=["accuracy"])
 
     if not os.path.exists(Config.checkpoint_path):
@@ -123,6 +114,8 @@ def save(**kwargs):
     for arr in kwargs.keys():
         np.save(os.path.join(Config.convlstm_train_dataset_path, arr + '.npy'), kwargs[arr])
 
+    print('\nDone.')
+
 
 def load():
     if not os.path.exists(Config.convlstm_train_dataset_path):
@@ -139,18 +132,56 @@ def load():
     return matrices
 
 
-if __name__ == '__main__':
-    # Create and save data
-    # x_resized, y_onehot, y_classes = create_data(Config.dataset_path)
-    # save(x_resized=x_resized, y_onehot=y_onehot, y_classes=y_classes)
-    
-    # Load data
-    train_data = load()
-    
-    x_resized = train_data['x_resized']
-    y_onehot, y_classes = train_data['y_onehot'], train_data['y_classes']
+def split():
+    y_classes = os.listdir(Config.dataset_path)
+    x_train_test_paths = {'train': [], 'test': []}
+    y_train_test = {'train': [], 'test': []}
 
-    # Split data and train model
-    x_train, x_test, y_train, y_test = train_test_split(x_resized, y_onehot, test_size=0.20, shuffle=True, random_state=0)
+    for cl in y_classes:
+        act_files = os.listdir(os.path.join(Config.dataset_path, cl))
+        groups = {}
+        for vid_file in act_files:
+            vid_path = os.path.join(os.path.join(Config.dataset_path, cl), vid_file)
+            vid_path_tokens = vid_path.split('_')
+            path_without_index = '_'.join(vid_path_tokens[:len(vid_path_tokens) - 1])
+
+            if not groups.get(path_without_index):
+                groups[path_without_index] = [vid_path]
+            else:
+                groups[path_without_index].append(vid_path)
+
+        group_len = [(g, len(groups[g])) for g in groups.keys()]
+        sorted_group_len = sorted(group_len, key=lambda x: x[1])
+
+        added_into_test = 0
+        for group, _ in sorted_group_len:
+            paths = [path for path in groups[group]]
+
+            y = [0] * len(y_classes)
+            y[y_classes.index(cl)] = 1
+
+            if added_into_test < int((1 - Config.train_part) * len(act_files)):
+                [x_train_test_paths['test'].append(path) for path in paths]
+                [y_train_test['test'].append(k) for k in [y] * len(paths)]
+                added_into_test += len(paths)
+            else:
+                [x_train_test_paths['train'].append(path) for path in paths]
+                [y_train_test['train'].append(k) for k in [y] * len(paths)]
+
+    return x_train_test_paths['train'], x_train_test_paths['test'], y_train_test['train'], y_train_test['test']
+
+
+if __name__ == '__main__':
+    # --------- Create and save data ---------
+    x_train_paths, x_test_paths, y_train, y_test = split()
+
+    # Create train and test data and save them for later use
+    x_train, y_train = create_data(x_train_paths, y_train)
+    x_test, y_test = create_data(x_test_paths, y_test)
+    save(x_train=x_train, y_train=y_train, x_test=x_test, y_test=y_test, classes=os.listdir(Config.dataset_path))
     
-    model = train_model(x_train, y_train)
+    # --------- Load data and train model ---------
+    # data = load()
+    # x_train, x_test, y_train, y_test = data['x_train'], data['x_test'], data['y_train'], data['y_test']
+    
+    # model = train_model(x_train, y_train)
