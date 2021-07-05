@@ -1,8 +1,7 @@
 class Config:
     dataset_path = '../data/dataset'
-    convlstm_train_dataset_path = '../data/convlstm_train_dataset'
-    data_path = '../model/'
-    checkpoint_path = '../checkpoints/cp.ckpt'
+    data_path = '../data/train_test'
+    model_path = '../data/model/'
     train_part = 0.8
     fps_to_take = 5
     step = 4
