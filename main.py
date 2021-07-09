@@ -1,7 +1,6 @@
 import sys
-from typing import Generator, List, Tuple
+from typing import List, Tuple
 
-from numpy.testing._private.nosetester import NoseTester
 from config import Config
 from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.layers import ConvLSTM2D, Dense, Flatten, Dropout, BatchNormalization
@@ -62,7 +61,7 @@ def split() -> Tuple[list, list, list, list]:
     return x_train_test_paths['train'], x_train_test_paths['test'], y_train_test['train'], y_train_test['test']
 
 
-def get_frames(video_path: str, window_step: int) -> Generator[NoseTester, None, None]:
+def get_frames(video_path: str, window_step: int):
     capture = cv2.VideoCapture(video_path)
 
     # count the number of frames
@@ -104,7 +103,7 @@ def get_frames(video_path: str, window_step: int) -> Generator[NoseTester, None,
         part += 1
 
 
-def create_data(paths: List[str], y: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+def create_data(paths: List[str], y: list) -> Tuple[np.ndarray, np.ndarray]:
     x_resized, y_onehot = [], []
     
     for index, vid_file in enumerate(paths):
@@ -156,9 +155,13 @@ def load(data: List[str]) -> list:
 
 def create_model(class_num: int) -> Sequential:
     model = Sequential()
-    model.add(ConvLSTM2D(filters=64, kernel_size=(3, 3), return_sequences=False, data_format="channels_last",
-                         input_shape=(Config.window, Config.img_dim, Config.img_dim, 3)))
+    model.add(ConvLSTM2D(filters=64, kernel_size=(3, 3), padding='same', return_sequences=False, data_format="channels_last",
+                         input_shape=(Config.window, Config.img_dim, Config.img_dim, 3), activation='relu'))
     model.add(BatchNormalization())
+    # model.add(ConvLSTM2D(filters=20, kernel_size=(3, 3), padding='same', return_sequences=True, data_format="channels_last", activation='relu'))
+    # model.add(BatchNormalization())
+    # model.add(ConvLSTM2D(filters=10, kernel_size=(1, 1), padding='same', return_sequences=False, data_format="channels_last", activation='relu'))
+    # model.add(BatchNormalization())
     # play with layers: batch normalization, multiple ConvLSTM2D layers
     model.add(Dropout(0.2))
     model.add(Flatten())
@@ -166,14 +169,15 @@ def create_model(class_num: int) -> Sequential:
     model.add(Dropout(0.3))
     model.add(Dense(class_num, activation="softmax"))
 
+    model.summary()
+
     return model
 
 
 def train_model(x_train: np.ndarray, y_train: np.ndarray) -> Sequential:
     print(x_train.shape)
     model = create_model(class_num=len(y_train[0]))
-    opt = SGD(lr=3e-5, decay=3e-6)
-    # opt = Adam(learning_rate=3e-6, lr=3e-6, decay=3e-7)
+    opt = Adam(learning_rate=7e-7, decay=1e-8)
     model.compile(loss='categorical_crossentropy', optimizer=opt, metrics=["accuracy"])
 
     if not os.path.exists(Config.model_path):
@@ -184,12 +188,12 @@ def train_model(x_train: np.ndarray, y_train: np.ndarray) -> Sequential:
     if not os.path.exists(checkpoints_path):
         os.makedirs(checkpoints_path)
 
-    cp_callback = ModelCheckpoint(filepath=checkpoints_path, save_weights_only=True, verbose=1)
+    cp_callback = ModelCheckpoint(filepath=checkpoints_path, save_weights_only=False, verbose=1, save_best_only=True)
 
     earlystop = EarlyStopping(patience=7)
     callbacks = [cp_callback, earlystop]
 
-    x_fit, x_val, y_fit, y_val = train_test_split(x_train, y_train, train_size=Config.train_part, random_state=42)
+    x_fit, x_val, y_fit, y_val = train_test_split(x_train, y_train, train_size=0.9, random_state=42)
     history = model.fit(x=x_fit, y=y_fit, epochs=40, batch_size=32, shuffle=True, callbacks=callbacks, validation_data=(x_val, y_val))
 
     model.save(Config.model_path + 'model.h5')
@@ -223,8 +227,8 @@ def train_model(x_train: np.ndarray, y_train: np.ndarray) -> Sequential:
 
 # --------------- PREDICTION & STATISTICS ---------------
 
-def evaluate_model(video_paths: List[str], y_test: np.ndarray) -> Tuple[float, float]:
-    x_test, y_test = [], load(['y_test'])
+def evaluate_model(video_paths: List[str], y: np.ndarray) -> Tuple[float, float]:
+    x_test, y_test = [], []
     model = load_model(Config.model_path + 'model.h5')
     
     for index, vid_file in enumerate(video_paths):
@@ -234,12 +238,12 @@ def evaluate_model(video_paths: List[str], y_test: np.ndarray) -> Tuple[float, f
 
             assert part.shape == (Config.window, Config.img_dim, Config.img_dim, 3)
             x_test.append(part)
-            y_test.append(np.asarray(y_test[index], dtype=np.uint8))
+            y_test.append(y[index])
 
     x_test = np.asarray(x_test)
     y_test = np.asarray(y_test)
 
-    loss, accuracy = model.evaluate(x_test)
+    loss, accuracy = model.evaluate(x_test, y_test)
 
     print(f'Loss={loss}, Accuracy={accuracy}')
 
@@ -257,7 +261,7 @@ def get_clsf_report(test_paths: List[str], y: np.ndarray) -> None:
             
             assert part.shape == (Config.window, Config.img_dim, Config.img_dim, 3)
             x_test.append(part)
-            y_test.append(np.asarray(y[index], dtype=np.uint8))
+            y_test.append(y[index])
 
     x_test = np.asarray(x_test)
     y_test = np.asarray(y_test)
@@ -283,8 +287,8 @@ def predict_class(video_path: str) -> str:
     for part in get_frames(video_path, Config.window):
         if part.size == 0:
             return
-        y_pred = model.predict(np.asarray([part]))[0]
-        y_preds.append(np.argmax(y_pred, axis = 1))
+        y_pred = model.predict([part])[0]
+        y_preds.append(np.argmax(y_pred, axis = 0))
     
     index = max(set(y_preds), key=y_preds.count)
     predicted_class = classes[index]
@@ -313,7 +317,7 @@ def train() -> None:
 
 @typer_app.command('evaluate')
 def evaluate() -> None:
-    y_test = load(['y_test'])
+    y_test = load(['y_test'])[0]
 
     if not os.path.exists(os.path.join(Config.data_path, 'x_test.txt')):
         print(f'Missing {os.path.abspath(os.path.join(Config.data_path, "x_test.txt"))} containing test video paths.')
@@ -322,7 +326,9 @@ def evaluate() -> None:
     with open(os.path.join(Config.data_path, 'x_test.txt'), "r") as f:
         content = f.readlines()
 
-    evaluate_model(content[:10], y_test[:10])
+    videos = len(content)
+
+    evaluate_model(map(lambda path: path.strip(), content[:videos]), y_test[:videos])
 
 
 @typer_app.command('predict')
